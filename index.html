@@ -121,6 +121,18 @@
     display:none;align-items:center;justify-content:center;cursor:pointer;line-height:1;
   }
   .stamp.sel .del{display:flex;}
+  .stamp .handle{
+    position:absolute;right:-9px;bottom:-9px;width:18px;height:18px;
+    background:var(--gold);border:2px solid #fff;border-radius:4px;
+    cursor:nwse-resize;display:none;touch-action:none;box-shadow:0 1px 3px rgba(0,0,0,.2);
+  }
+  .stamp.sel .handle{display:block;}
+  .stamp .badge{
+    position:absolute;top:-11px;left:-9px;
+    background:var(--navy);color:#fff;font-size:11px;font-weight:700;
+    padding:1px 8px;border-radius:10px;border:2px solid #fff;line-height:1.5;
+    pointer-events:none;
+  }
   .pagenav{display:flex;align-items:center;gap:12px;justify-content:center;margin:14px 0;}
   .pagenav span{font-size:14px;color:#5a6480;font-weight:700;}
   .selpanel{
@@ -205,6 +217,16 @@
         <button id="sealModeUpload" onclick="switchSealMode('upload')">印影画像を使う</button>
       </div>
 
+      <div class="field" style="margin-bottom:14px;">
+        <label>この印のラベル（編集画面だけの目印。PDFには印字されません）</label>
+        <select id="sealLabel" style="max-width:220px;">
+          <option value="">なし</option>
+          <option value="甲">甲（こちら側）</option>
+          <option value="乙">乙（相手側）</option>
+          <option value="丙">丙</option>
+        </select>
+      </div>
+
       <!-- 丸印生成 -->
       <div id="sealMake">
         <div class="toolrow">
@@ -259,7 +281,7 @@
     <div class="selpanel" id="selPanel">
       <div class="row">
         <span style="font-weight:700;color:var(--navy);font-size:13px;">選択中の大きさ</span>
-        <input type="range" id="sizeRange" min="4" max="45" value="16" oninput="resizeSelected()">
+        <input type="range" id="sizeRange" min="4" max="60" value="16" oninput="resizeSelected()">
         <button class="btn btn-ghost btn-sm" onclick="deleteSelected()">削除</button>
       </div>
       <p class="hint" style="margin-bottom:0;">ドラッグで移動、スライダーで大きさ調整。この印は今のページに配置されます。</p>
@@ -380,12 +402,26 @@ function renderOverlay(){
     const img = document.createElement('img');
     img.src = it.dataUrl;
     el.appendChild(img);
+
+    if(it.label){
+      const badge = document.createElement('div');
+      badge.className = 'badge';
+      badge.textContent = it.label;
+      el.appendChild(badge);
+    }
+
     const del = document.createElement('div');
     del.className = 'del';
     del.textContent = '×';
     del.onclick = (e)=>{ e.stopPropagation(); deleteItem(it.id); };
     el.appendChild(del);
-    el.onpointerdown = e => startDrag(e, it, el);
+
+    const handle = document.createElement('div');
+    handle.className = 'handle';
+    handle.onpointerdown = e => startResize(e, it, el);
+    el.appendChild(handle);
+
+    el.onpointerdown = e => { if(e.target===handle || e.target===del) return; startDrag(e, it, el); };
     overlay.appendChild(el);
   });
 }
@@ -412,6 +448,41 @@ function startDrag(e, it, el){
     el.releasePointerCapture(e.pointerId);
     el.removeEventListener('pointermove', move);
     el.removeEventListener('pointerup', up);
+  };
+  el.addEventListener('pointermove', move);
+  el.addEventListener('pointerup', up);
+}
+
+// ===== マウスで大きさ変更（右下ハンドル・左上を固定） =====
+function startResize(e, it, el){
+  e.preventDefault();
+  e.stopPropagation();
+  selectItem(it.id);
+  el.setPointerCapture(e.pointerId);
+  const rect = overlay.getBoundingClientRect();
+  const w = overlay.clientWidth, h = overlay.clientHeight;
+  const width0 = it.wFrac * w;
+  const height0 = width0 * it.aspect;
+  const tlx = it.cx*w - width0/2;  // 固定する左上
+  const tly = it.cy*h - height0/2;
+  const move = ev=>{
+    let nw = (ev.clientX - rect.left) - tlx;
+    nw = Math.max(20, Math.min(w, nw));
+    const nh = nw * it.aspect;
+    it.wFrac = nw / w;
+    it.cx = (tlx + nw/2)/w;
+    it.cy = (tly + nh/2)/h;
+    el.style.width = nw+'px';
+    el.style.height = nh+'px';
+    el.style.left = tlx+'px';
+    el.style.top  = tly+'px';
+  };
+  const up = ()=>{
+    el.releasePointerCapture(e.pointerId);
+    el.removeEventListener('pointermove', move);
+    el.removeEventListener('pointerup', up);
+    const s = document.getElementById('sizeRange');
+    s.value = Math.max(s.min, Math.min(s.max, Math.round(it.wFrac*100)));
   };
   el.addEventListener('pointermove', move);
   el.addEventListener('pointerup', up);
@@ -556,12 +627,18 @@ function drawSealPreview(){
     document.getElementById('sealCenter').value.trim(),
     document.getElementById('sealColor').value);
 }
+function getSealLabel(){ return document.getElementById('sealLabel').value; }
+function nextSealPos(){
+  const n = items.filter(i=>i.type==='seal').length;   // 置くたび少しずらして重ならないように
+  return { cx: Math.max(0.2, 0.8 - n*0.05), cy: Math.max(0.2, 0.85 - n*0.05) };
+}
 function addSealFromCanvas(){
   const c = document.getElementById('sealPreview');
   const dataUrl = c.toDataURL('image/png');
+  const pos = nextSealPos();
   items.push({
-    id:idSeq++, type:'seal', page:currentPage,
-    cx:0.8, cy:0.85, wFrac:0.14, aspect:1, dataUrl
+    id:idSeq++, type:'seal', page:currentPage, label:getSealLabel(),
+    cx:pos.cx, cy:pos.cy, wFrac:0.14, aspect:1, dataUrl
   });
   selectItem(items[items.length-1].id);
 }
@@ -582,9 +659,10 @@ document.getElementById('sealFile').onchange = e=>{
       if(Math.max(w,h)>max){ const r=max/Math.max(w,h); w=Math.round(w*r); h=Math.round(h*r); }
       const c=document.createElement('canvas'); c.width=w; c.height=h;
       c.getContext('2d').drawImage(im,0,0,w,h);
+      const pos = nextSealPos();
       items.push({
-        id:idSeq++, type:'seal', page:currentPage,
-        cx:0.8, cy:0.85, wFrac:0.14, aspect:h/w, dataUrl:c.toDataURL('image/png')
+        id:idSeq++, type:'seal', page:currentPage, label:getSealLabel(),
+        cx:pos.cx, cy:pos.cy, wFrac:0.14, aspect:h/w, dataUrl:c.toDataURL('image/png')
       });
       selectItem(items[items.length-1].id);
     };
