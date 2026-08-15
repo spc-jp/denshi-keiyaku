@@ -312,6 +312,14 @@
         </select>
       </div>
 
+      <div class="field" style="margin-bottom:14px;">
+        <label>配置済みの印をラベルで呼び出して修正</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+          <select id="editTarget" style="flex:1;min-width:180px;"></select>
+          <button class="btn btn-ghost btn-sm" type="button" onclick="recallSeal()">呼び出す</button>
+        </div>
+      </div>
+
       <!-- 丸印生成 -->
       <div id="sealMake">
         <div class="toolrow">
@@ -331,7 +339,8 @@
         <div class="sealPreviewBox">
           <canvas id="sealPreview" width="300" height="300"></canvas>
           <div>
-            <button class="btn btn-gold" onclick="addSealFromCanvas()">この印鑑を配置する</button>
+            <button class="btn btn-gold" id="sealAddBtn" onclick="addSealFromCanvas()">この印鑑を配置する</button>
+            <button class="btn btn-ghost btn-sm" id="sealNewBtn" type="button" onclick="cancelEditSeal()" style="display:none;">新規に切替</button>
             <p class="hint">中央文字は3文字以下で1列、4文字以上で2列になります。空欄も可。</p>
           </div>
         </div>
@@ -537,7 +546,9 @@ async function buildDemoPdfBytes(){
 function addDemoSeal(outer, center, label, cx, cy){
   const c=document.createElement('canvas'); c.width=300; c.height=300;
   drawSeal(c.getContext('2d'), outer, center, '#d0111b');
-  items.push({id:idSeq++, type:'seal', page:1, label:label, cx:cx, cy:cy, wFrac:0.13, aspect:1, dataUrl:c.toDataURL('image/png')});
+  items.push({id:idSeq++, type:'seal', page:1, label:label, editable:true,
+    sealParams:{outer:outer, center:center, color:'#d0111b'},
+    cx:cx, cy:cy, wFrac:0.13, aspect:1, dataUrl:c.toDataURL('image/png')});
 }
 async function loadDemo(){
   closeSettings();
@@ -552,6 +563,7 @@ async function loadDemo(){
   addDemoSeal('サンプル工業株式会社','代表取締役印','乙',0.82,0.85);
   selectItem(null);
   renderOverlay();
+  refreshSealEditList();
   toast('デモデータを表示しました。完成イメージをそのままご確認いただけます。');
 }
 function clearAll(){
@@ -564,6 +576,8 @@ function clearAll(){
   document.getElementById('fileName').textContent = '';
   const fi = document.getElementById('fileInput'); if(fi) fi.value = '';
   overlay.innerHTML = '';
+  exitEditMode();
+  refreshSealEditList();
   toast('クリアしました。契約書PDFを読み込むと再開できます。');
 }
 
@@ -727,8 +741,10 @@ function resizeSelected(){
 }
 function deleteSelected(){ if(selectedId) deleteItem(selectedId); }
 function deleteItem(id){
+  if(id===editingSealId) exitEditMode();
   items = items.filter(x=>x.id!==id);
   if(selectedId===id) selectItem(null); else renderOverlay();
+  refreshSealEditList();
 }
 
 // ===== タブ切替 =====
@@ -849,16 +865,89 @@ function nextSealPos(){
   const n = items.filter(i=>i.type==='seal').length;   // 置くたび少しずらして重ならないように
   return { cx: Math.max(0.2, 0.8 - n*0.05), cy: Math.max(0.2, 0.85 - n*0.05) };
 }
-function addSealFromCanvas(){
-  const c = document.getElementById('sealPreview');
-  const dataUrl = c.toDataURL('image/png');
-  const pos = nextSealPos();
-  items.push({
-    id:idSeq++, type:'seal', page:currentPage, label:getSealLabel(),
-    cx:pos.cx, cy:pos.cy, wFrac:0.14, aspect:1, dataUrl
-  });
-  selectItem(items[items.length-1].id);
+let editingSealId = null;
+
+function currentSealParams(){
+  return {
+    outer: document.getElementById('sealOuter').value.trim(),
+    center: document.getElementById('sealCenter').value.trim(),
+    color: document.getElementById('sealColor').value
+  };
 }
+function makeSealDataUrl(p){
+  const c=document.createElement('canvas'); c.width=300; c.height=300;
+  drawSeal(c.getContext('2d'), p.outer, p.center, p.color);
+  return c.toDataURL('image/png');
+}
+function addSealFromCanvas(){
+  const p = currentSealParams();
+  const label = getSealLabel();
+  const dataUrl = makeSealDataUrl(p);
+  if(editingSealId){
+    const id = editingSealId;
+    const it = items.find(x=>x.id===id);
+    if(it){ it.label=label; it.sealParams=p; it.dataUrl=dataUrl; }
+    exitEditMode();
+    selectItem(id);
+    toast('印を更新しました。位置や大きさはそのままです。');
+  }else{
+    const pos = nextSealPos();
+    items.push({
+      id:idSeq++, type:'seal', page:currentPage, label:label,
+      editable:true, sealParams:p,
+      cx:pos.cx, cy:pos.cy, wFrac:0.14, aspect:1, dataUrl
+    });
+    selectItem(items[items.length-1].id);
+  }
+  refreshSealEditList();
+}
+
+// ラベルで配置済みの印を呼び出して修正
+function refreshSealEditList(){
+  const sel = document.getElementById('editTarget');
+  if(!sel) return;
+  const seals = items.filter(x=>x.type==='seal' && x.editable);
+  sel.innerHTML = '';
+  if(seals.length===0){
+    const o=document.createElement('option'); o.value=''; o.textContent='（修正できる印はまだありません）';
+    sel.appendChild(o); return;
+  }
+  seals.forEach((it,i)=>{
+    const o=document.createElement('option');
+    o.value=it.id;
+    const lab = it.label ? it.label+'：' : '';
+    const nm = (it.sealParams && it.sealParams.outer) ? it.sealParams.outer : ('印'+(i+1));
+    o.textContent = lab + nm;
+    sel.appendChild(o);
+  });
+}
+async function recallSeal(){
+  const id = parseInt(document.getElementById('editTarget').value, 10);
+  const it = items.find(x=>x.id===id);
+  if(!it || !it.editable){ toast('呼び出せる印がありません。'); return; }
+  const p = it.sealParams || {};
+  document.getElementById('sealOuter').value  = p.outer  || '';
+  document.getElementById('sealCenter').value = p.center || '';
+  document.getElementById('sealColor').value  = p.color  || '#d0111b';
+  document.getElementById('sealLabel').value  = it.label || '';
+  switchSealMode('make');
+  drawSealPreview();
+  enterEditMode(id);
+  if(it.page && it.page!==currentPage){ currentPage=it.page; await renderPage(); }
+  selectItem(id);
+  toast('呼び出しました。内容を直して「この内容で更新する」を押してください。');
+}
+function enterEditMode(id){
+  editingSealId = id;
+  document.getElementById('sealAddBtn').textContent = 'この内容で更新する';
+  document.getElementById('sealNewBtn').style.display = 'inline-block';
+}
+function exitEditMode(){
+  editingSealId = null;
+  document.getElementById('sealAddBtn').textContent = 'この印鑑を配置する';
+  document.getElementById('sealNewBtn').style.display = 'none';
+}
+function cancelEditSeal(){ exitEditMode(); toast('新規配置モードに戻しました。'); }
 
 // ===== 印影画像アップロード =====
 document.getElementById('sealPickBtn').onclick = ()=> document.getElementById('sealFile').click();
@@ -878,10 +967,11 @@ document.getElementById('sealFile').onchange = e=>{
       c.getContext('2d').drawImage(im,0,0,w,h);
       const pos = nextSealPos();
       items.push({
-        id:idSeq++, type:'seal', page:currentPage, label:getSealLabel(),
+        id:idSeq++, type:'seal', page:currentPage, label:getSealLabel(), editable:false,
         cx:pos.cx, cy:pos.cy, wFrac:0.14, aspect:h/w, dataUrl:c.toDataURL('image/png')
       });
       selectItem(items[items.length-1].id);
+      refreshSealEditList();
     };
     im.src = reader.result;
   };
@@ -950,6 +1040,7 @@ async function downloadPdf(){
 // リサイズ時にプレビュー再描画
 let rz;
 window.addEventListener('resize', ()=>{ clearTimeout(rz); rz=setTimeout(()=>{ if(pdfDoc) renderPage(); },250); });
+refreshSealEditList();
 </script>
 </body>
 </html>
