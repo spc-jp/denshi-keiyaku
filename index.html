@@ -588,6 +588,7 @@ function renderOverlay(){
   items.filter(it=> it.page === currentPage).forEach(it=>{
     const el = document.createElement('div');
     el.className = 'stamp' + (it.id===selectedId ? ' sel':'');
+    el._itemId = it.id;
     const width = it.wFrac * w;
     const height = width * it.aspect;
     el.style.width = width + 'px';
@@ -624,7 +625,7 @@ function renderOverlay(){
 // ===== ドラッグ移動 =====
 function startDrag(e, it, el){
   e.preventDefault();
-  selectItem(it.id);
+  markSelected(it.id);
   el.setPointerCapture(e.pointerId);
   el.style.cursor = 'grabbing';
   const rect = overlay.getBoundingClientRect();
@@ -652,7 +653,7 @@ function startDrag(e, it, el){
 function startResize(e, it, el){
   e.preventDefault();
   e.stopPropagation();
-  selectItem(it.id);
+  markSelected(it.id);
   el.setPointerCapture(e.pointerId);
   const rect = overlay.getBoundingClientRect();
   const w = overlay.clientWidth, h = overlay.clientHeight;
@@ -684,18 +685,28 @@ function startResize(e, it, el){
 }
 
 // ===== 選択 =====
-overlay.addEventListener('pointerdown', e=>{ if(e.target===overlay) selectItem(null); });
+overlay.addEventListener('pointerdown', e=>{ if(e.target===overlay) markSelected(null); });
+
+// 全部作り直す選択（追加・削除・ページ切替のときだけ使う）
 function selectItem(id){
   selectedId = id;
+  renderOverlay();
+  updateSelPanel();
+}
+// 要素は作り直さず、選択の見た目だけ更新（ドラッグ・リサイズ中に使う）
+function markSelected(id){
+  selectedId = id;
+  Array.from(overlay.children).forEach(ch=> ch.classList.toggle('sel', ch._itemId===id));
+  updateSelPanel();
+}
+function updateSelPanel(){
   const panel = document.getElementById('selPanel');
-  if(id){
-    const it = items.find(x=>x.id===id);
-    panel.classList.add('show');
-    document.getElementById('sizeRange').value = Math.round(it.wFrac*100);
+  if(selectedId){
+    const it = items.find(x=>x.id===selectedId);
+    if(it){ panel.classList.add('show'); document.getElementById('sizeRange').value = Math.round(it.wFrac*100); }
   }else{
     panel.classList.remove('show');
   }
-  renderOverlay();
 }
 function resizeSelected(){
   const it = items.find(x=>x.id===selectedId);
